@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 
 def connect_sheet():
     """
-    Membuka koneksi Google Spreadsheet menggunakan
-    environment variable GOOGLE_SERVICE_ACCOUNT.
+    Membuka Google Spreadsheet menggunakan environment
+    variable GOOGLE_SERVICE_ACCOUNT.
     """
 
     service_account_json = os.getenv(
@@ -45,7 +45,7 @@ def connect_sheet():
     if not service_account_json:
         raise RuntimeError(
             "Environment variable GOOGLE_SERVICE_ACCOUNT "
-            "belum diatur."
+            "belum diatur di Railway."
         )
 
     service_account_info = json.loads(service_account_json)
@@ -62,28 +62,62 @@ def connect_sheet():
 
 
 # =========================================================
-# HEADER REGISTRASI
+# HEADER GOOGLE SHEETS
 # =========================================================
+
+EXPECTED_HEADERS = [
+    "telegram_id",  # A
+    "username",     # B
+    "nama",         # C
+    "broker",       # D
+    "harga",        # E
+    "register",     # F
+    "expired",      # G
+    "status",       # H
+    "referral",     # I
+    "id_wallet",    # J
+    "gmail_broker", # K
+]
+
 
 def ensure_registration_headers(sheet):
     """
-    Memastikan header J dan K tersedia.
-    Kolom A-I yang sudah ada tidak diubah.
+    Memeriksa header A-K.
+
+    PERHATIAN:
+    Fungsi ini hanya memperbarui baris 1.
+    Data member mulai baris 2 tidak dihapus atau diubah.
     """
 
     current_headers = sheet.row_values(1)
 
-    if len(current_headers) < 10 or not str(
-        current_headers[9]
-    ).strip():
-        sheet.update_acell("J1", "id_wallet")
+    normalized_headers = [
+        str(value).strip()
+        for value in current_headers[:len(EXPECTED_HEADERS)]
+    ]
 
-    current_headers = sheet.row_values(1)
+    if normalized_headers == EXPECTED_HEADERS:
+        logger.info(
+            "[SHEET] Header A-K sudah sesuai."
+        )
+        return True
 
-    if len(current_headers) < 11 or not str(
-        current_headers[10]
-    ).strip():
-        sheet.update_acell("K1", "gmail_broker")
+    logger.warning(
+        "[SHEET] Header A-K tidak sesuai. "
+        "Memperbarui header sesuai struktur registrasi."
+    )
+
+    sheet.update(
+        range_name="A1:K1",
+        values=[EXPECTED_HEADERS],
+        value_input_option="RAW",
+    )
+
+    logger.info(
+        "[SHEET] Header A-K berhasil diperbarui."
+    )
+
+    return True
 
 
 # =========================================================
@@ -93,9 +127,10 @@ def ensure_registration_headers(sheet):
 def calculate_registration_dates(data):
     """
     F = register: DD-MM-YYYY HH:MM:SS
-    G = expired:  DD-MM-YYYY, tiga tahun setelah registrasi.
+    G = expired: DD-MM-YYYY, tiga tahun setelah registrasi.
 
-    Menggunakan registered_at dari main.py apabila tersedia.
+    Menggunakan registered_at atau register dari data
+    jika tersedia.
     """
 
     register_value = (
@@ -133,7 +168,6 @@ def calculate_registration_dates(data):
     if register_datetime is None:
         register_datetime = datetime.now(TIMEZONE)
 
-    # Pastikan waktu mengikuti WIB.
     if register_datetime.tzinfo is None:
         register_datetime = register_datetime.replace(
             tzinfo=TIMEZONE
@@ -164,46 +198,43 @@ def calculate_registration_dates(data):
 
 def find_next_registration_row(sheet):
     """
-    Mencari baris kosong berikutnya berdasarkan kolom A.
-
-    Data registrasi baru ditulis pada satu baris penuh,
-    dari kolom A sampai K.
+    Menentukan baris berikutnya berdasarkan kolom A.
+    Baris 1 adalah header.
+    Data baru dimulai minimal dari baris 2.
     """
 
     column_a = sheet.col_values(1)
 
-    # Baris 1 adalah header.
-    # Minimal data baru dimulai pada baris 2.
     return max(2, len(column_a) + 1)
 
 
 # =========================================================
-# SAVE REGISTRATION BARU
+# SIMPAN REGISTRASI MEMBER BARU
 # =========================================================
 
 def save_registration(data, admin_id=None):
     """
-    Menyimpan registrasi setelah admin menyetujui.
+    Menyimpan member setelah admin menyetujui registrasi.
 
-    Struktur kolom:
     A = telegram_id
     B = username
     C = nama
     D = broker
-    E = harga (kosong)
+    E = harga
     F = register
-    G = expired (3 tahun)
-    H = status ACTIVE
-    I = referral (kosong)
+    G = expired
+    H = status
+    I = referral
     J = id_wallet
     K = gmail_broker
 
-    Satu registrasi ditulis ke satu baris.
-    Registrasi berikutnya ditulis ke baris di bawahnya.
+    Satu member = satu baris.
     """
 
     try:
         sheet = connect_sheet()
+
+        # Memastikan header tersedia sebelum menyimpan.
         ensure_registration_headers(sheet)
 
         telegram_id = data.get("telegram_id", "")
@@ -221,22 +252,21 @@ def save_registration(data, admin_id=None):
         )
 
         row = [
-            telegram_id,       # A
-            username,          # B
-            nama,              # C
-            broker,            # D
-            "",                # E
-            register_time,     # F
-            expired_time,      # G
-            "ACTIVE",          # H
-            "",                # I
-            wallet_id,         # J
-            gmail_broker,      # K
+            telegram_id,
+            username,
+            nama,
+            broker,
+            "",
+            register_time,
+            expired_time,
+            "ACTIVE",
+            "",
+            wallet_id,
+            gmail_broker,
         ]
 
         next_row = find_next_registration_row(sheet)
 
-        # Tulis secara eksplisit ke satu baris A:K.
         sheet.update(
             range_name=f"A{next_row}:K{next_row}",
             values=[row],
@@ -244,13 +274,10 @@ def save_registration(data, admin_id=None):
         )
 
         logger.info(
-            "[SHEET] Registrasi tersimpan pada baris %s. "
-            "Telegram ID: %s | Register: %s | "
-            "Expired: %s | Status: ACTIVE",
+            "[SHEET] Registrasi berhasil disimpan. "
+            "Baris=%s TelegramID=%s Status=ACTIVE",
             next_row,
             telegram_id,
-            register_time,
-            expired_time,
         )
 
         return True
@@ -263,16 +290,24 @@ def save_registration(data, admin_id=None):
 
 
 # =========================================================
-# SAVE MEMBER LAMA - KOMPATIBILITAS
+# SIMPAN MEMBER LAMA - KOMPATIBILITAS
 # =========================================================
 
 def save_member(data):
     """
-    Fungsi lama dipertahankan untuk bot sebelumnya.
+    Fungsi kompatibilitas untuk format member lama A-I.
 
-    Struktur A-I:
-    telegram_id, username, nama, paket, harga,
-    register, expired, status, referral.
+    A = telegram_id
+    B = username
+    C = nama
+    D = paket
+    E = harga
+    F = register
+    G = expired
+    H = status
+    I = referral
+
+    Fungsi ini tidak mengubah header.
     """
 
     try:
@@ -299,7 +334,7 @@ def save_member(data):
         )
 
         logger.info(
-            "[SHEET] Member lama berhasil disimpan pada baris %s.",
+            "[SHEET] Member lama disimpan pada baris %s.",
             next_row,
         )
 
@@ -313,28 +348,60 @@ def save_member(data):
 
 
 # =========================================================
-# GET EXPIRED MEMBERS
+# PARSE TANGGAL KEDALUWARSA
+# =========================================================
+
+def parse_expired_date(value):
+    """
+    Mengubah teks tanggal kedaluwarsa menjadi datetime WIB.
+    Mengembalikan None jika format tidak dikenali.
+    """
+
+    if not value:
+        return None
+
+    value = str(value).strip()
+
+    date_formats = (
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M",
+        "%d-%m-%Y",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+    )
+
+    for date_format in date_formats:
+        try:
+            parsed = datetime.strptime(
+                value,
+                date_format,
+            )
+            return parsed.replace(tzinfo=TIMEZONE)
+        except ValueError:
+            continue
+
+    return None
+
+
+# =========================================================
+# AMBIL MEMBER YANG SUDAH KEDALUWARSA
 # =========================================================
 
 def get_expired_group_members():
     """
-    Memeriksa member ACTIVE yang masa berlakunya sudah habis.
-
-    Kompatibel dengan format tanggal:
-    DD-MM-YYYY
-    DD-MM-YYYY HH:MM:SS
-    YYYY-MM-DD
-    YYYY-MM-DD HH:MM:SS
-
-    Catatan:
-    Fungsi ini mengembalikan data kedaluwarsa.
-    Pengeluaran dari grup harus ditangani oleh pemanggilnya.
+    Mengambil member ACTIVE yang masa berlakunya habis.
+    Tidak mengeluarkan member dari grup secara langsung.
     """
 
     expired_members = []
 
     try:
         sheet = connect_sheet()
+
+        # get_all_records memerlukan header unik dan tidak kosong.
+        ensure_registration_headers(sheet)
+
         rows = sheet.get_all_records()
         now = datetime.now(TIMEZONE)
 
@@ -350,46 +417,28 @@ def get_expired_group_members():
                 row.get("expired", "")
             ).strip()
 
-            if not expired_text:
-                continue
-
-            expired_datetime = None
-
-            date_formats = (
-                "%d-%m-%Y %H:%M:%S",
-                "%d-%m-%Y %H:%M",
-                "%d-%m-%Y",
-                "%Y-%m-%d %H:%M:%S",
-                "%Y-%m-%d %H:%M",
-                "%Y-%m-%d",
+            expired_datetime = parse_expired_date(
+                expired_text
             )
 
-            for date_format in date_formats:
-                try:
-                    expired_datetime = datetime.strptime(
-                        expired_text,
-                        date_format,
-                    ).replace(tzinfo=TIMEZONE)
-                    break
-                except ValueError:
-                    continue
-
             if expired_datetime is None:
-                logger.warning(
-                    "[EXPIRED] Format tanggal tidak dikenali: %s",
-                    expired_text,
+                if expired_text:
+                    logger.warning(
+                        "[EXPIRED] Format tanggal tidak dikenali: %s",
+                        expired_text,
+                    )
+                continue
+
+            # Tanggal tanpa jam dianggap berlaku sampai
+            # akhir hari tersebut.
+            if len(expired_text) == 10:
+                expired_datetime = expired_datetime.replace(
+                    hour=23,
+                    minute=59,
+                    second=59,
                 )
-                continue
 
-            # Jika hanya tanggal yang disimpan, masa berlaku
-            # berakhir pada akhir tanggal tersebut.
-            if (
-                len(expired_text) == 10
-                and expired_datetime.date() == now.date()
-            ):
-                continue
-
-            if now >= expired_datetime:
+            if now > expired_datetime:
                 expired_members.append({
                     "telegram_id": row.get("telegram_id", ""),
                     "username": row.get("username", ""),
@@ -415,17 +464,20 @@ def get_expired_group_members():
 
 
 # =========================================================
-# UPDATE MEMBER STATUS
+# UPDATE STATUS MEMBER
 # =========================================================
 
 def update_member_status(telegram_id, new_status):
     """
-    Mengubah status kolom H berdasarkan Telegram ID
-    pada kolom A.
+    Mengubah status pada kolom H berdasarkan Telegram ID
+    di kolom A.
     """
 
     try:
         sheet = connect_sheet()
+
+        ensure_registration_headers(sheet)
+
         rows = sheet.get_all_records()
 
         for index, row in enumerate(rows, start=2):
@@ -436,6 +488,7 @@ def update_member_status(telegram_id, new_status):
             if row_telegram_id == str(
                 telegram_id
             ).strip():
+
                 sheet.update_cell(
                     index,
                     8,
@@ -443,8 +496,8 @@ def update_member_status(telegram_id, new_status):
                 )
 
                 logger.info(
-                    "[SHEET] Telegram ID %s -> %s "
-                    "(baris %s)",
+                    "[SHEET] Telegram ID %s diubah menjadi %s "
+                    "pada baris %s.",
                     telegram_id,
                     new_status,
                     index,
